@@ -1,0 +1,11 @@
+/build*/
+/compile_commands.json
+/.cache/
+/scratch/
+*.swp
+*~
+*.o
+*.s
+*.dot
+a.out
+
