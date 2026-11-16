@@ -322,28 +322,63 @@ static std::unique_ptr<ProtoTypeAST> ParseExtern() {
     return ParsePrototype();
 }
 
-int main() {
-  while (true) {
-    int Tok = gettok();
-    switch (Tok) {
-    case tok_eof:
-      printf("tok_eof\n");
-      return 0;
-    case tok_def:
-      printf("tok_def\n");
-      break;
-    case tok_extern:
-      printf("tok_extern\n");
-      break;
-    case tok_identifier:
-      printf("tok_identifier '%s'\n", IdentifierStr.c_str());
-      break;
-    case tok_number:
-      printf("tok_number %g\n", NumVal);
-      break;
-    default:
-      printf("'%c'\n", Tok);
-      break;
+static void HandleDefinition() {
+    if (ParseDefinition()) {
+        fprintf(stderr, "Parsed a function definition.\n");
+    } else {
+        getNextToken();
     }
-  }
+}
+
+static void HandleExtern() {
+    if (ParseExtern()) {
+        fprintf(stderr, "Parsed an extern\n");
+    } else {
+        getNextToken();
+    }
+}
+
+static void HandleTopLevelExpression() {
+    if (ParseTopLevelExpr()) {
+        fprintf(stderr, "Parsed a top-level expr\n");
+    } else {
+        getNextToken();
+    }
+}
+
+static void MainLoop() {
+    while (true) {
+        fprintf(stderr, "ready> ");
+        switch (CurTok) {
+        case tok_eof:
+            return;
+        case ';': // ignore top-level semicolons.
+            getNextToken();
+            break;
+        case tok_def:
+            HandleDefinition();
+            break;
+        case tok_extern:
+            HandleExtern();
+            break;
+        default:
+            HandleTopLevelExpression();
+            break;
+        }
+    }
+}
+
+
+int main() {
+    BinopPrecedence['<'] = 10;
+    BinopPrecedence['+'] = 20;
+    BinopPrecedence['-'] = 20;
+    BinopPrecedence['*'] = 40; // highest.
+
+    fprintf(stderr, "ready> ");
+    getNextToken();
+
+    MainLoop();
+
+    return 0;
 }
