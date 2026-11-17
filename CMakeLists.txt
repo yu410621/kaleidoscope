@@ -32,3 +32,17 @@ add_executable(toy src/toy.cpp)
 # The LLVM components toy links against. This list grows with the chapters.
 llvm_map_components_to_libnames(LLVM_LIBS support)
 target_link_libraries(toy PRIVATE ${LLVM_LIBS})
+
+# `ninja -C build check` rebuilds toy and runs the lit tests under test/.
+find_program(LLVM_LIT NAMES llvm-lit lit HINTS ${LLVM_TOOLS_BINARY_DIR})
+if(LLVM_LIT)
+  add_custom_target(check
+    COMMAND ${LLVM_LIT} -v ${CMAKE_SOURCE_DIR}/test
+            -Dbuild_dir=${CMAKE_BINARY_DIR}
+            -Dllvm_tools_dir=${LLVM_TOOLS_BINARY_DIR}
+    DEPENDS toy
+    USES_TERMINAL
+    COMMENT "Running the Kaleidoscope regression tests")
+else()
+  message(WARNING "llvm-lit not found: the 'check' target is unavailable")
+endif()
