@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
@@ -19,6 +20,10 @@ static cl::OptionCategory ToyCategory("toy options");
 static cl::opt<bool> DumpTokens("dump-tokens",
                                 cl::desc("Print the token stream and exit"),
                                 cl::cat(ToyCategory));
+static cl::opt<bool>
+    DumpAST("dump-ast",
+            cl::desc("Print the AST of every top-level item after parsing"),
+            cl::cat(ToyCategory));
 
 enum Token {
   tok_eof = -1,
@@ -97,6 +102,10 @@ namespace {
 class ExprAST {
 public:
   virtual ~ExprAST() = default;
+
+  /// Print this node and its children, one node per line, indented by
+  /// \p Indent spaces.
+  virtual void dump(raw_ostream &OS, unsigned Indent) const = 0;
 };
 
 class NumberExprAST : public ExprAST {
@@ -104,6 +113,9 @@ class NumberExprAST : public ExprAST {
 
 public:
   NumberExprAST(double Val) : Val(Val) {}
+  void dump(raw_ostream &OS, unsigned Indent) const override {
+    OS.indent(Indent) << "NumberExpr " << Val << '\n';
+  }
 };
 
 class VariableExprAST : public ExprAST {
@@ -111,6 +123,9 @@ class VariableExprAST : public ExprAST {
 
 public:
   VariableExprAST(const std::string &Name) : Name(Name) {}
+  void dump(raw_ostream &OS, unsigned Indent) const override {
+    OS.indent(Indent) << "VariableExpr " << Name << '\n';
+  }
 };
 
 class BinaryExprAST : public ExprAST {
@@ -121,6 +136,12 @@ public:
   BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS,
                 std::unique_ptr<ExprAST> RHS)
       : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+
+  void dump(raw_ostream &OS, unsigned Indent) const override {
+    OS.indent(Indent) << "BinaryExpr '" << Op << "'\n";
+    LHS->dump(OS, Indent + 2);
+    RHS->dump(OS, Indent + 2);
+  }
 };
 
 class CallExprAST : public ExprAST {
@@ -131,6 +152,11 @@ public:
   CallExprAST(const std::string &Callee,
               std::vector<std::unique_ptr<ExprAST>> Args)
       : Callee(Callee), Args(std::move(Args)) {}
+  void dump(raw_ostream &OS, unsigned Indent) const override {
+    OS.indent(Indent) << "CallExpr " << Callee << '\n';
+    for (const auto &Arg : Args)
+      Arg->dump(OS, Indent + 2);
+  }
 };
 
 class ProtoTypeAST {
@@ -142,6 +168,12 @@ public:
       : Name(Name), Args(std::move(Args)) {}
 
   const std::string &getName() const { return Name; }
+
+  void dump(raw_ostream &OS, unsigned Indent) const {
+    OS.indent(Indent) << "Prototype " << Name << '(';
+    interleave(Args, OS, " ");
+    OS << ")\n";
+  }
 };
 
 class FunctionAST {
@@ -152,6 +184,12 @@ public:
   FunctionAST(std::unique_ptr<ProtoTypeAST> Proto,
               std::unique_ptr<ExprAST> Body)
       : Proto(std::move(Proto)), Body(std::move(Body)) {}
+
+  void dump(raw_ostream &OS, unsigned Indent) const {
+    OS.indent(Indent) << "Function\n";
+    Proto->dump(OS, Indent + 2);
+    Body->dump(OS, Indent + 2);
+  }
 };
 
 } // end anonymous namespace
@@ -341,7 +379,9 @@ static std::unique_ptr<ProtoTypeAST> ParseExtern() {
 }
 
 static void HandleDefinition() {
-  if (ParseDefinition()) {
+  if (auto FnAST = ParseDefinition()) {
+    if (DumpAST)
+      FnAST->dump(errs(), 0);
     fprintf(stderr, "Parsed a function definition.\n");
   } else {
     getNextToken();
@@ -349,7 +389,9 @@ static void HandleDefinition() {
 }
 
 static void HandleExtern() {
-  if (ParseExtern()) {
+  if (auto ProtoAST = ParseExtern()) {
+    if (DumpAST)
+      ProtoAST->dump(errs(), 0);
     fprintf(stderr, "Parsed an extern\n");
   } else {
     getNextToken();
@@ -357,7 +399,9 @@ static void HandleExtern() {
 }
 
 static void HandleTopLevelExpression() {
-  if (ParseTopLevelExpr()) {
+  if (auto FnAST = ParseTopLevelExpr()) {
+    if (DumpAST)
+      FnAST->dump(errs(), 0);
     fprintf(stderr, "Parsed a top-level expr\n");
   } else {
     getNextToken();
