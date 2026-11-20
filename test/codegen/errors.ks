@@ -12,3 +12,7 @@ one(1, 2);
 
 def one(x) x + 1;
 # CHECK: Error: Function cannot be redefined.
+
+extern arity(a);
+def arity(a b) a+b;
+# CHECK: Error: Definition conflicts with a declaration.

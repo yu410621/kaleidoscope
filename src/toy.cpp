@@ -203,6 +203,7 @@ public:
       : Name(Name), Args(std::move(Args)) {}
 
   const std::string &getName() const { return Name; }
+  const std::vector<std::string> &getArgs() const { return Args; }
 
   void dump(raw_ostream &OS, unsigned Indent) const {
     OS.indent(Indent) << "Prototype " << Name << '(';
@@ -513,6 +514,19 @@ Function *FunctionAST::codegen() {
 
   if (!TheFunction->empty()) {
     return (Function *)LogErrorV("Function cannot be redefined.");
+  }
+
+  const auto &Params = Proto->getArgs();
+  if (TheFunction->arg_size() != Params.size()) {
+    return (Function *)LogErrorV("Definition conflicts with a declaration.");
+  }
+
+  // Drop the old names first so that two parameters can change names.
+  for (auto &Arg : TheFunction->args()) {
+    Arg.setName("");
+  }
+  for (auto &Arg : TheFunction->args()) {
+    Arg.setName(Params[Arg.getArgNo()]);
   }
 
   BasicBlock *BB = BasicBlock::Create(*TheContext, "entry", TheFunction);

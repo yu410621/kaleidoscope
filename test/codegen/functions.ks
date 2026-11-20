@@ -35,3 +35,16 @@ def callcos(x) cos(x) + cos(1.234);
 # CHECK-LABEL: define double @__anon_expr() {
 # CHECK-NEXT:  entry:
 # CHECK-NEXT:    ret double 9.000000e+00
+
+extern renamed(a);
+def renamed(b) b;
+# CHECK-LABEL: define double @renamed(double %b) {
+# CHECK-NEXT:  entry:
+# CHECK-NEXT:    ret double %b
+
+extern swapnames(a b);
+def swapnames(b a) b-a;
+# CHECK-LABEL: define double @swapnames(double %b, double %a) {
+# CHECK-NEXT:  entry:
+# CHECK-NEXT:    %subtmp = fsub double %b, %a
+# CHECK-NEXT:    ret double %subtmp
