@@ -20,6 +20,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,16 +36,16 @@ enum ActionKind {
   EmitLLVMIR,     ///< Print the complete module after processing all input.
 };
 
-static cl::opt<ActionKind>
-    Action(cl::desc("Action to perform (default: interactive REPL):"),
-           cl::init(RunInteractive),
-           cl::values(clEnumValN(ParseOnly, "parse-only",
-                                 "Parse the input and stop; combine with "
-                                 "-dump-ast to inspect the result"),
-                      clEnumValN(EmitLLVMIR, "emit-llvm",
-                                 "Compile the whole input and print its LLVM IR "
-                                 "to stdout")),
-           cl::cat(ToyCategory));
+static cl::opt<ActionKind> Action(
+    cl::desc("Action to perform (default: interactive REPL):"),
+    cl::init(RunInteractive),
+    cl::values(clEnumValN(ParseOnly, "parse-only",
+                          "Parse the input and stop; combine with "
+                          "-dump-ast to inspect the result"),
+               clEnumValN(EmitLLVMIR, "emit-llvm",
+                          "Compile the whole input and print its LLVM IR "
+                          "to stdout")),
+    cl::cat(ToyCategory));
 
 static cl::opt<bool> DumpTokens("dump-tokens",
                                 cl::desc("Print the token stream and exit"),
@@ -524,12 +525,18 @@ Function *FunctionAST::codegen() {
 
   if (Value *RetVal = Body->codegen()) {
     Builder->CreateRet(RetVal);
-    verifyFunction(*TheFunction);
+    verifyFunction(*TheFunction, &errs());
     return TheFunction;
   }
 
   TheFunction->eraseFromParent();
   return nullptr;
+}
+
+/// Print an LLVM IR value from the debugger.
+LLVM_DUMP_METHOD void dumpValue(const Value *V) {
+  V->print(errs());
+  errs() << '\n';
 }
 
 //===----------------------------------------------------------------------===//
