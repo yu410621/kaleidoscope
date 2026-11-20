@@ -1,4 +1,4 @@
-# RUN: %toy -dump-ast < %s 2>&1 | FileCheck --strict-whitespace %s
+# RUN: %toy -parse-only -dump-ast < %s 2>&1 | FileCheck --strict-whitespace %s
 
 # '*' binds tighter than '+' and '-'; operators of equal precedence group to
 # the left.

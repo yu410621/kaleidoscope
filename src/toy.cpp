@@ -7,7 +7,17 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
@@ -16,6 +26,20 @@
 using namespace llvm;
 
 static cl::OptionCategory ToyCategory("toy options");
+
+/// What toy does with the code it parses.
+enum ActionKind {
+  RunInteractive, ///< REPL: print the IR of every top-level item as it is read.
+  ParseOnly,      ///< Stop after parsing; nothing is generated.
+};
+
+static cl::opt<ActionKind>
+    Action(cl::desc("Action to perform (default: interactive REPL):"),
+           cl::init(RunInteractive),
+           cl::values(clEnumValN(ParseOnly, "parse-only",
+                                 "Parse the input and stop; combine with "
+                                 "-dump-ast to inspect the result")),
+           cl::cat(ToyCategory));
 
 static cl::opt<bool> DumpTokens("dump-tokens",
                                 cl::desc("Print the token stream and exit"),
@@ -102,6 +126,7 @@ namespace {
 class ExprAST {
 public:
   virtual ~ExprAST() = default;
+  virtual Value *codegen() = 0;
 
   /// Print this node and its children, one node per line, indented by
   /// \p Indent spaces.
@@ -116,6 +141,7 @@ public:
   void dump(raw_ostream &OS, unsigned Indent) const override {
     OS.indent(Indent) << "NumberExpr " << Val << '\n';
   }
+  Value *codegen() override;
 };
 
 class VariableExprAST : public ExprAST {
@@ -126,6 +152,7 @@ public:
   void dump(raw_ostream &OS, unsigned Indent) const override {
     OS.indent(Indent) << "VariableExpr " << Name << '\n';
   }
+  Value *codegen() override;
 };
 
 class BinaryExprAST : public ExprAST {
@@ -142,6 +169,7 @@ public:
     LHS->dump(OS, Indent + 2);
     RHS->dump(OS, Indent + 2);
   }
+  Value *codegen() override;
 };
 
 class CallExprAST : public ExprAST {
@@ -157,6 +185,7 @@ public:
     for (const auto &Arg : Args)
       Arg->dump(OS, Indent + 2);
   }
+  Value *codegen() override;
 };
 
 class ProtoTypeAST {
@@ -174,6 +203,7 @@ public:
     interleave(Args, OS, " ");
     OS << ")\n";
   }
+  Function *codegen();
 };
 
 class FunctionAST {
@@ -190,6 +220,7 @@ public:
     Proto->dump(OS, Indent + 2);
     Body->dump(OS, Indent + 2);
   }
+  Function *codegen();
 };
 
 } // end anonymous namespace
@@ -378,11 +409,149 @@ static std::unique_ptr<ProtoTypeAST> ParseExtern() {
   return ParsePrototype();
 }
 
+//===----------------------------------------------------------------------===//
+// Code Generation
+//===----------------------------------------------------------------------===//
+
+static std::unique_ptr<LLVMContext> TheContext;
+static std::unique_ptr<Module> TheModule;
+static std::unique_ptr<IRBuilder<>> Builder;
+static std::map<std::string, Value *> NamedValues;
+
+Value *LogErrorV(const char *Str) {
+  LogError(Str);
+  return nullptr;
+}
+
+Value *NumberExprAST::codegen() {
+  return ConstantFP::get(*TheContext, APFloat(Val));
+}
+
+Value *VariableExprAST::codegen() {
+  Value *V = NamedValues[Name];
+  if (!V) {
+    return LogErrorV("Unknown variable name");
+  }
+  return V;
+}
+
+Value *BinaryExprAST::codegen() {
+  Value *L = LHS->codegen();
+  Value *R = RHS->codegen();
+  if (!L || !R) {
+    return nullptr;
+  }
+
+  switch (Op) {
+  case '+':
+    return Builder->CreateFAdd(L, R, "addtmp");
+  case '-':
+    return Builder->CreateFSub(L, R, "subtmp");
+  case '*':
+    return Builder->CreateFMul(L, R, "multmp");
+  case '<':
+    L = Builder->CreateFCmpULT(L, R, "cmptmp");
+    return Builder->CreateUIToFP(L, Type::getDoubleTy(*TheContext), "booltmp");
+  default:
+    return LogErrorV("invalid binary operator");
+  }
+}
+
+Value *CallExprAST::codegen() {
+  Function *CalleeF = TheModule->getFunction(Callee);
+  if (!CalleeF) {
+    return LogErrorV("Unknown function referenced");
+  }
+
+  if (CalleeF->arg_size() != Args.size()) {
+    return LogErrorV("Incorrect # arguments passed");
+  }
+
+  std::vector<Value *> ArgsV;
+  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
+    ArgsV.push_back(Args[i]->codegen());
+    if (!ArgsV.back()) {
+      return nullptr;
+    }
+  }
+
+  return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
+}
+
+Function *ProtoTypeAST::codegen() {
+  std::vector<Type *> Doubles(Args.size(), Type::getDoubleTy(*TheContext));
+  FunctionType *FT =
+      FunctionType::get(Type::getDoubleTy(*TheContext), Doubles, false);
+
+  Function *F =
+      Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+
+  unsigned Idx = 0;
+  for (auto &Arg : F->args()) {
+    Arg.setName(Args[Idx++]);
+  }
+
+  return F;
+}
+
+Function *FunctionAST::codegen() {
+  Function *TheFunction = TheModule->getFunction(Proto->getName());
+
+  if (!TheFunction) {
+    TheFunction = Proto->codegen();
+  }
+
+  if (!TheFunction) {
+    return nullptr;
+  }
+
+  if (!TheFunction->empty()) {
+    return (Function *)LogErrorV("Function cannot be redefined.");
+  }
+
+  BasicBlock *BB = BasicBlock::Create(*TheContext, "entry", TheFunction);
+  Builder->SetInsertPoint(BB);
+
+  NamedValues.clear();
+  for (auto &Arg : TheFunction->args()) {
+    NamedValues[std::string(Arg.getName())] = &Arg;
+  }
+
+  if (Value *RetVal = Body->codegen()) {
+    Builder->CreateRet(RetVal);
+    verifyFunction(*TheFunction);
+    return TheFunction;
+  }
+
+  TheFunction->eraseFromParent();
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Top-Level parsing and driver
+//===----------------------------------------------------------------------===//
+
+/// InitializeModule - Create the context, the module that collects every
+/// function, and the IRBuilder that inserts instructions into them.
+static void InitializeModule() {
+  TheContext = std::make_unique<LLVMContext>();
+  TheModule = std::make_unique<Module>("my cool jit", *TheContext);
+  Builder = std::make_unique<IRBuilder<>>(*TheContext);
+}
+
 static void HandleDefinition() {
   if (auto FnAST = ParseDefinition()) {
     if (DumpAST)
       FnAST->dump(errs(), 0);
-    fprintf(stderr, "Parsed a function definition.\n");
+    if (Action == ParseOnly) {
+      fprintf(stderr, "Parsed a function definition.\n");
+      return;
+    }
+    if (auto *FnIR = FnAST->codegen()) {
+      fprintf(stderr, "Read function definition:");
+      FnIR->print(errs());
+      fprintf(stderr, "\n");
+    }
   } else {
     getNextToken();
   }
@@ -392,7 +561,15 @@ static void HandleExtern() {
   if (auto ProtoAST = ParseExtern()) {
     if (DumpAST)
       ProtoAST->dump(errs(), 0);
-    fprintf(stderr, "Parsed an extern\n");
+    if (Action == ParseOnly) {
+      fprintf(stderr, "Parsed an extern\n");
+      return;
+    }
+    if (auto *FnIR = ProtoAST->codegen()) {
+      fprintf(stderr, "Read extern: ");
+      FnIR->print(errs());
+      fprintf(stderr, "\n");
+    }
   } else {
     getNextToken();
   }
@@ -402,7 +579,18 @@ static void HandleTopLevelExpression() {
   if (auto FnAST = ParseTopLevelExpr()) {
     if (DumpAST)
       FnAST->dump(errs(), 0);
-    fprintf(stderr, "Parsed a top-level expr\n");
+    if (Action == ParseOnly) {
+      fprintf(stderr, "Parsed a top-level expr\n");
+      return;
+    }
+    if (auto *FnIR = FnAST->codegen()) {
+      fprintf(stderr, "Read top-level expression:");
+      FnIR->print(errs());
+      fprintf(stderr, "\n");
+
+      // Remove the anonymous expression.
+      FnIR->eraseFromParent();
+    }
   } else {
     getNextToken();
   }
@@ -484,6 +672,9 @@ int main(int argc, char **argv) {
 
   Prompt();
   getNextToken();
+
+  // Make the module, which holds all the code.
+  InitializeModule();
 
   MainLoop();
 

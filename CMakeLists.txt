@@ -30,7 +30,7 @@ add_compile_options(-Wall -Wextra)
 add_executable(toy src/toy.cpp)
 
 # The LLVM components toy links against. This list grows with the chapters.
-llvm_map_components_to_libnames(LLVM_LIBS support)
+llvm_map_components_to_libnames(LLVM_LIBS core support)
 target_link_libraries(toy PRIVATE ${LLVM_LIBS})
 
 # `ninja -C build check` rebuilds toy and runs the lit tests under test/.
