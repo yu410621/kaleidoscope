@@ -1,3 +1,4 @@
+
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +32,7 @@ static cl::OptionCategory ToyCategory("toy options");
 enum ActionKind {
   RunInteractive, ///< REPL: print the IR of every top-level item as it is read.
   ParseOnly,      ///< Stop after parsing; nothing is generated.
+  EmitLLVMIR,     ///< Print the complete module after processing all input.
 };
 
 static cl::opt<ActionKind>
@@ -38,7 +40,10 @@ static cl::opt<ActionKind>
            cl::init(RunInteractive),
            cl::values(clEnumValN(ParseOnly, "parse-only",
                                  "Parse the input and stop; combine with "
-                                 "-dump-ast to inspect the result")),
+                                 "-dump-ast to inspect the result"),
+                      clEnumValN(EmitLLVMIR, "emit-llvm",
+                                 "Compile the whole input and print its LLVM IR "
+                                 "to stdout")),
            cl::cat(ToyCategory));
 
 static cl::opt<bool> DumpTokens("dump-tokens",
@@ -548,9 +553,11 @@ static void HandleDefinition() {
       return;
     }
     if (auto *FnIR = FnAST->codegen()) {
-      fprintf(stderr, "Read function definition:");
-      FnIR->print(errs());
-      fprintf(stderr, "\n");
+      if (Action == RunInteractive) {
+        fprintf(stderr, "Read function definition:");
+        FnIR->print(errs());
+        fprintf(stderr, "\n");
+      }
     }
   } else {
     getNextToken();
@@ -566,9 +573,11 @@ static void HandleExtern() {
       return;
     }
     if (auto *FnIR = ProtoAST->codegen()) {
-      fprintf(stderr, "Read extern: ");
-      FnIR->print(errs());
-      fprintf(stderr, "\n");
+      if (Action == RunInteractive) {
+        fprintf(stderr, "Read extern: ");
+        FnIR->print(errs());
+        fprintf(stderr, "\n");
+      }
     }
   } else {
     getNextToken();
@@ -584,9 +593,11 @@ static void HandleTopLevelExpression() {
       return;
     }
     if (auto *FnIR = FnAST->codegen()) {
-      fprintf(stderr, "Read top-level expression:");
-      FnIR->print(errs());
-      fprintf(stderr, "\n");
+      if (Action == RunInteractive) {
+        fprintf(stderr, "Read top-level expression:");
+        FnIR->print(errs());
+        fprintf(stderr, "\n");
+      }
 
       // Remove the anonymous expression.
       FnIR->eraseFromParent();
@@ -677,6 +688,8 @@ int main(int argc, char **argv) {
   InitializeModule();
 
   MainLoop();
+  if (Action == EmitLLVMIR)
+    TheModule->print(outs(), nullptr);
 
   return 0;
 }
