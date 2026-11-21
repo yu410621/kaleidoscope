@@ -2,6 +2,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <llvm/IR/PassInstrumentation.h>
 #include <map>
 #include <memory>
 #include <string>
@@ -17,13 +18,20 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 
 using namespace llvm;
 
@@ -54,6 +62,9 @@ static cl::opt<bool>
     DumpAST("dump-ast",
             cl::desc("Print the AST of every top-level item after parsing"),
             cl::cat(ToyCategory));
+
+static cl::opt<bool>
+    NoOpt("O0", cl::desc("Do not run the function optimization pipeline"), cl::cat(ToyCategory));
 
 enum Token {
   tok_eof = -1,
@@ -425,6 +436,14 @@ static std::unique_ptr<Module> TheModule;
 static std::unique_ptr<IRBuilder<>> Builder;
 static std::map<std::string, Value *> NamedValues;
 
+static std::unique_ptr<PassInstrumentationCallbacks> ThePIC;
+static std::unique_ptr<StandardInstrumentations> TheSI;
+static std::unique_ptr<LoopAnalysisManager> TheLAM;
+static std::unique_ptr<FunctionAnalysisManager> TheFAM;
+static std::unique_ptr<CGSCCAnalysisManager> TheCGAM;
+static std::unique_ptr<ModuleAnalysisManager> TheMAM;
+static std::unique_ptr<FunctionPassManager> TheFPM;
+
 Value *LogErrorV(const char *Str) {
   LogError(Str);
   return nullptr;
@@ -539,7 +558,9 @@ Function *FunctionAST::codegen() {
 
   if (Value *RetVal = Body->codegen()) {
     Builder->CreateRet(RetVal);
-    verifyFunction(*TheFunction, &errs());
+    if (!verifyFunction(*TheFunction, &errs()) && !NoOpt) {
+      TheFPM->run(*TheFunction, *TheFAM);
+    }
     return TheFunction;
   }
 
@@ -557,12 +578,38 @@ LLVM_DUMP_METHOD void dumpValue(const Value *V) {
 // Top-Level parsing and driver
 //===----------------------------------------------------------------------===//
 
-/// InitializeModule - Create the context, the module that collects every
-/// function, and the IRBuilder that inserts instructions into them.
-static void InitializeModule() {
+/// Set up IR construction and the function optimization pipeline.
+static void InitializeModuleAndManagers() {
+  // Open a new context and module.
   TheContext = std::make_unique<LLVMContext>();
-  TheModule = std::make_unique<Module>("my cool jit", *TheContext);
+  TheModule = std::make_unique<Module>("KaleidoscopeJit", *TheContext);
+
+  // Create a new builder for the module.
   Builder = std::make_unique<IRBuilder<>>(*TheContext);
+
+  // Create a new pass manager and analysis managers.
+  
+  TheLAM = std::make_unique<LoopAnalysisManager>();
+  TheFAM = std::make_unique<FunctionAnalysisManager>();
+  TheCGAM = std::make_unique<CGSCCAnalysisManager>();
+  TheMAM = std::make_unique<ModuleAnalysisManager>();
+
+  ThePIC = std::make_unique<PassInstrumentationCallbacks>();
+  TheSI = std::make_unique<StandardInstrumentations>(*TheContext, /*DebugLogging*/ true);
+  TheSI->registerCallbacks(*ThePIC, TheMAM.get());
+
+  TheFPM = std::make_unique<FunctionPassManager>();
+  TheFPM->addPass(InstCombinePass());
+  TheFPM->addPass(ReassociatePass());
+  TheFPM->addPass(GVNPass());
+  TheFPM->addPass(SimplifyCFGPass());
+
+  PassBuilder PB;
+  PB.registerModuleAnalyses(*TheMAM);
+  PB.registerCGSCCAnalyses(*TheCGAM);
+  PB.registerFunctionAnalyses(*TheFAM);
+  PB.registerLoopAnalyses(*TheLAM);
+  PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);
 }
 
 static void HandleDefinition() {
@@ -620,7 +667,8 @@ static void HandleTopLevelExpression() {
         fprintf(stderr, "\n");
       }
 
-      // Remove the anonymous expression.
+      // Discard cached analyses before deleting the anonymous function.
+      TheFAM->clear(*FnIR, FnIR->getName());
       FnIR->eraseFromParent();
     }
   } else {
@@ -705,8 +753,7 @@ int main(int argc, char **argv) {
   Prompt();
   getNextToken();
 
-  // Make the module, which holds all the code.
-  InitializeModule();
+  InitializeModuleAndManagers();
 
   MainLoop();
   if (Action == EmitLLVMIR)

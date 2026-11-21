@@ -1,4 +1,4 @@
-# RUN: %toy < %s 2>&1 | FileCheck %s
+# RUN: %toy -O0 < %s 2>&1 | FileCheck %s
 
 def f(x) y;
 # CHECK: Error: Unknown variable name

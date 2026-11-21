@@ -1,4 +1,4 @@
-# RUN: %toy < %s 2>&1 | FileCheck %s
+# RUN: %toy -O0 < %s 2>&1 | FileCheck %s
 
 # Arguments keep their names; every instruction result is named after the
 # operation that produced it.

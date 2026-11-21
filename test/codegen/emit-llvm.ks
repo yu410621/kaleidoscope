@@ -1,5 +1,5 @@
-# RUN: %toy -emit-llvm < %s | FileCheck %s
-# RUN: %toy -emit-llvm < %s | opt -passes=verify -disable-output
+# RUN: %toy -O0 -emit-llvm < %s | FileCheck %s
+# RUN: %toy -O0 -emit-llvm < %s | opt -passes=verify -disable-output
 
 extern cos(x);
 def square(x) x*x;
