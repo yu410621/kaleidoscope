@@ -66,6 +66,11 @@ static cl::opt<bool>
 static cl::opt<bool>
     NoOpt("O0", cl::desc("Do not run the function optimization pipeline"), cl::cat(ToyCategory));
 
+static cl::opt<bool> DebugPM(
+    "debug-pass-manager",
+    cl::desc("Print pass manager debugging information"),
+    cl::cat(ToyCategory));
+
 enum Token {
   tok_eof = -1,
 
@@ -595,7 +600,7 @@ static void InitializeModuleAndManagers() {
   TheMAM = std::make_unique<ModuleAnalysisManager>();
 
   ThePIC = std::make_unique<PassInstrumentationCallbacks>();
-  TheSI = std::make_unique<StandardInstrumentations>(*TheContext, /*DebugLogging*/ true);
+  TheSI = std::make_unique<StandardInstrumentations>(*TheContext, DebugPM);
   TheSI->registerCallbacks(*ThePIC, TheMAM.get());
 
   TheFPM = std::make_unique<FunctionPassManager>();
@@ -604,7 +609,7 @@ static void InitializeModuleAndManagers() {
   TheFPM->addPass(GVNPass());
   TheFPM->addPass(SimplifyCFGPass());
 
-  PassBuilder PB;
+  PassBuilder PB(/*TM=*/nullptr, PipelineTuningOptions(), std::nullopt, ThePIC.get());
   PB.registerModuleAnalyses(*TheMAM);
   PB.registerCGSCCAnalyses(*TheCGAM);
   PB.registerFunctionAnalyses(*TheFAM);
